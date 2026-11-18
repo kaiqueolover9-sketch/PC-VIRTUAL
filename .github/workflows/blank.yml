@@ -1,0 +1,84 @@
+
+name: PC Virtual
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Instalar Área de Trabalho
+        run: |
+          sudo apt update
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
+            xfce4 xfce4-goodies \
+            tigervnc-standalone-server \
+            dbus-x11 curl
+
+      - name: Configurar Senha do Usuário
+        env:
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        run: |
+          mkdir -p ~/.vnc
+          printf '%s' "$VNC_PASSWORD" | \
+            tigervncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+
+      - name: Configurar Área de Trabalho
+        run: |
+          cat > ~/.vnc/xstartup <<'EOF'
+          #!/bin/sh
+          unset SESSION_MANAGER
+          unset DBUS_SESSION_BUS_ADDRESS
+          exec startxfce4
+          EOF
+          chmod +x ~/.vnc/xstartup
+
+      - name: Iniciar Servidor VNC
+        run: |
+          tigervncserver :1 \
+            -localhost yes \
+            -geometry 1280x720 \
+            -depth 24 \
+            -rfbauth "$HOME/.vnc/passwd"
+
+      - name: Instalar Ngrok
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+        run: |
+          curl -fsSL \
+            https://bin.ngrok.com/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz \
+            | tar -xz
+
+          ./ngrok config add-authtoken "$NGROK_AUTHTOKEN"
+
+      - name: Conectar VNC via Ngrok
+        run: |
+          ./ngrok tcp 5901 \
+            --log=stdout \
+            --log-format=logfmt > ngrok.log 2>&1 &
+
+          for i in $(seq 1 30); do
+            ADDRESS=$(grep -oE 'url=tcp://[^ ]+' ngrok.log | head -n 1 | cut -d= -f2- || true)
+
+            if [ -n "$ADDRESS" ]; then
+              echo "## PC Virtual iniciado!" >> $GITHUB_STEP_SUMMARY
+              echo "Endereço VNC: $ADDRESS" >> $GITHUB_STEP_SUMMARY
+              break
+            fi
+
+            sleep 2
+          done
+
+          if [ -z "${ADDRESS:-}" ]; then
+            cat ngrok.log
+            exit 1
+          fi
+
+      - name: Manter a Máquina Ativa
+        run: |
+          echo "PC Virtual pronto!"
+          sleep infinity
