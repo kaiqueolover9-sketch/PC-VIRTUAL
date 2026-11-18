@@ -1,5 +1,5 @@
 
-name: PC Virtual
+name: PC Virtual Tailscale
 
 on:
   workflow_dispatch:
@@ -15,70 +15,36 @@ jobs:
           sudo apt update
           sudo DEBIAN_FRONTEND=noninteractive apt install -y \
             xfce4 xfce4-goodies \
-            tigervnc-standalone-server \
-            dbus-x11 curl
+            xrdp xorgxrdp dbus-x11
 
-      - name: Configurar Senha do Usuário
+      - name: Criar Usuário do PC
         env:
-          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+          PC_PASSWORD: ${{ secrets.PC_PASSWORD }}
         run: |
-          mkdir -p ~/.vnc
-          printf '%s' "$VNC_PASSWORD" | \
-            tigervncpasswd -f > ~/.vnc/passwd
-          chmod 600 ~/.vnc/passwd
+          sudo useradd -m -s /bin/bash pcuser
+          echo "pcuser:$PC_PASSWORD" | sudo chpasswd
 
-      - name: Configurar Área de Trabalho
+          sudo -u pcuser bash -c \
+            'echo "startxfce4" > ~/.xsession'
+
+      - name: Iniciar RDP
         run: |
-          cat > ~/.vnc/xstartup <<'EOF'
-          #!/bin/sh
-          unset SESSION_MANAGER
-          unset DBUS_SESSION_BUS_ADDRESS
-          exec startxfce4
-          EOF
-          chmod +x ~/.vnc/xstartup
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
 
-      - name: Iniciar Servidor VNC
+      - name: Conectar ao Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Mostrar IP do PC
         run: |
-          tigervncserver :1 \
-            -localhost yes \
-            -geometry 1280x720 \
-            -depth 24 \
-            -rfbauth "$HOME/.vnc/passwd"
+          echo "IP Tailscale:"
+          tailscale ip -4
 
-      - name: Instalar Ngrok
-        env:
-          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          echo "Porta RDP: 3389"
+
+      - name: Manter PC Virtual Ativo
         run: |
-          curl -fsSL \
-            https://bin.ngrok.com/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz \
-            | tar -xz
-
-          ./ngrok config add-authtoken "$NGROK_AUTHTOKEN"
-
-      - name: Conectar VNC via Ngrok
-        run: |
-          ./ngrok tcp 5901 \
-            --log=stdout \
-            --log-format=logfmt > ngrok.log 2>&1 &
-
-          for i in $(seq 1 30); do
-            ADDRESS=$(grep -oE 'url=tcp://[^ ]+' ngrok.log | head -n 1 | cut -d= -f2- || true)
-
-            if [ -n "$ADDRESS" ]; then
-              echo "## PC Virtual iniciado!" >> $GITHUB_STEP_SUMMARY
-              echo "Endereço VNC: $ADDRESS" >> $GITHUB_STEP_SUMMARY
-              break
-            fi
-
-            sleep 2
-          done
-
-          if [ -z "${ADDRESS:-}" ]; then
-            cat ngrok.log
-            exit 1
-          fi
-
-      - name: Manter a Máquina Ativa
-        run: |
-          echo "PC Virtual pronto!"
+          echo "PC Virtual iniciado!"
           sleep infinity
